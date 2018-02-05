@@ -44,6 +44,15 @@ class Board(object):
                 if init_val != 0:
                     log.info("Init of {} = {}".format(cell._ndx, init_val))
                     cell.set(init_val)
+        log.info("Initial uncertainty {}".format(self.get_uncertainty()))
+
+    def get_uncertainty(self):
+        uncertainty = 0
+        for col in range(9):
+            for row in range(9):
+                cell = self.matrix[row][col]
+                uncertainty += len(cell.options) - 1
+        return uncertainty
 
     def show_known(self, max_options=1):
         lines = []
@@ -90,11 +99,113 @@ class Board(object):
         #log.debug("Setting value {} on cell {}".format(val, cell._ndx))
         cell.set(val)
 
+    def yield_rows(self):
+        for row in range(9):
+            cells = [self.matrix[row][col] for col in range(9)]
+            log.debug("testing row {}".format(row))
+            yield cells
+
+    def yield_cols(self):
+        for col in range(9):
+            cells = [self.matrix[row][col] for row in range(9)]
+            log.debug("testing col {}".format(col))
+            yield cells
+
+    def yield_boxes(self):
+        for box_row in range(3):
+            for box_col in range(3):
+                cells = []
+                for i in range(3*box_row, 3*box_row + 3):
+                    for j in range(3*box_col, 3*box_col + 3):
+                        cells.append(self.matrix[i][j])
+                log.debug("testing {} box".format(_BOX_LABELS[box_row][box_col]))
+                yield cells
+
     def direct_elim(self):
         """ check when a number can't fit anywhere else in a row, col or box """
+        def unique_check(cells):
+            for val in range(1, 10):
+                ndx_list = [c for c in cells if c.has(val)]
+                if len(ndx_list) == 1:
+                    cell, = ndx_list
+                    if cell.solved:
+                        continue
+                    log.info("{} only fits at {}".format(val, cell._ndx))
+                    cell.set(val)
 
-        pass
+        uncertainty = self.get_uncertainty()
+        keep_going = True
+        while keep_going:
+            for row in self.yield_rows():
+                unique_check(row)
 
+            for col in self.yield_cols():
+                unique_check(col)
+
+            for box in self.yield_boxes():
+                unique_check(box)
+
+            # NOTE: it doesn't seem that these tests are different from one
+            # another
+            new_uncertainty = self.get_uncertainty()
+            if new_uncertainty < uncertainty:
+                log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
+                uncertainty = new_uncertainty
+            else:
+                log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
+                keep_going = False
+
+    def close_sets(self):
+        """ set group of x options in x locations indicates these x numbers
+            can only occur in these x locations -- so they can should be removed
+            from the options list outside of the specific locations where they
+            are found
+        """
+        def check_for_pairs(cells):
+            unknowns = sum(1 for c in cells if not c.solved)
+            log.debug("{} unknowns in this group".format(unknowns))
+            for group_size in range(2, unknowns):
+                """ this is only useful when there are unknowns to potentially remove """
+                groups = [c.options for c in cells if len(c.options) == group_size]
+                if len(groups) < group_size:
+                    continue
+                for template in groups:
+                    matched = 0
+                    for g in groups:
+                        if template == g:
+                            matched += 1
+                    if matched == group_size:
+                        """ we have a winner - the items in this group
+                            can be eliminated from all other cells
+                        """
+                        log.info("matched group {} found".format(
+                            ''.join(str(x) for x in template)))
+                        for c in cells:
+                            if c.solved or c.options == template:
+                                continue
+                            for val in template:
+                                c.remove(val)
+
+
+        uncertainty = self.get_uncertainty()
+        keep_going = True
+        while keep_going:
+            for row in self.yield_rows():
+                check_for_pairs(row)
+
+            for col in self.yield_cols():
+                check_for_pairs(col)
+
+            for box in self.yield_boxes():
+                check_for_pairs(box)
+
+            new_uncertainty = self.get_uncertainty()
+            if new_uncertainty < uncertainty:
+                log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
+                uncertainty = new_uncertainty
+            else:
+                log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
+                keep_going = False
 
 class Cell(object):
     def __init__(self, row, col):
@@ -131,6 +242,9 @@ class Cell(object):
                 val = self.options[0]
                 log.info("Found {} = {}, no other options".format(self._ndx, val))
                 self.set(val)
+
+    def has(self, val):
+        return val in self.options
 
     def set_notification(self, fcn):
         self.notify_cb = fcn
