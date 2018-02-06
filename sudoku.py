@@ -70,8 +70,13 @@ class Board(object):
         lines.append('-'*lw)
         print('\n'.join(lines))
 
+    def export(self):
+        return [[c.solved if c.solved else 0 for c in row] for row in self.matrix]
+
     def update(self, row, col, val):
         """ clear val from row, col and quadrant """
+        cell = self.matrix[row][col]
+        log.debug("setting {} to {} from {} options".format(cell._ndx, val, cell.options))
         log.debug("Clearing {} from row {}".format(val, row))
         for j in range(9):
             if j == col:
@@ -95,8 +100,7 @@ class Board(object):
                 #log.debug("Clearing {} from {}, {}".format(val, i, j))
                 self.matrix[i][j].remove(val)
 
-        cell = self.matrix[row][col]
-        #log.debug("Setting value {} on cell {}".format(val, cell._ndx))
+        log.debug("Setting value {} on cell {}".format(val, cell._ndx))
         cell.set(val)
 
     def yield_rows(self):
@@ -207,6 +211,65 @@ class Board(object):
                 log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
                 keep_going = False
 
+    def box_sets(self):
+        """ check within a box if there is only one row / col where a number
+            can occur and remove number from that row / col in adjoining boxes
+
+            [a b c | d e f | g h i]
+
+            if a number is in two rows or columns and two quads, it can't be in
+            those rows or columns in the 3rd quad.. this is likely not useful
+
+            consider when you have a total # of remaining variables & remaining
+            spots spread through multiple rows / col / boxes, if you can
+            determine which variable must go in a certain spot
+        """
+        _COL_BOX_NAMES = ["top", "center", "bottom"]
+        _ROW_BOX_NAMES = ["left", "middle", "right"]
+
+        for box_row in range(3):
+            for box_col in range(3):
+                solved = []
+                box_row_options = [set() for x in range(3)]   # fill with all options from row
+                box_col_options = [set() for x in range(3)]
+                for i in range(3*box_row, 3*box_row + 3):
+                    for j in range(3*box_col, 3*box_col + 3):
+                        cell = self.matrix[i][j]
+                        box_row_options[i-3*box_row].update(cell.options)
+                        box_col_options[j-3*box_col].update(cell.options)
+                        if cell.solved:
+                            solved.append(cell.solved)
+                log.debug("box {}, {} row options: {}".format(box_row, box_col, box_row_options))
+                log.debug("box {}, {} col options: {}".format(box_row, box_col, box_col_options))
+                for val in range(1, 10):
+                    if val in solved:
+                        continue
+                    for this in range(3):
+                        others = [x for x in range(3) if x != this]
+                        if not any(val in box_row_options[n] for n in others):
+                            """ only row for a value, remove from rest of row """
+                            row = this + box_row * 3
+                            log.debug("Row {}, {} box is the only place for {}".format(
+                                row, _ROW_BOX_NAMES[box_col], val))
+                            for col in range(9):
+                                if col // 3 == box_col:
+                                    """ don't remove value from this box """
+                                    continue
+                                self.matrix[row][col].remove(val)
+                        if not any(val in box_col_options[n] for n in others):
+                            """ only col for a value, remove from rest of col """
+                            col = this + box_col * 3
+                            log.debug("Col {}, {} box is the only place for {}".format(
+                                col, _COL_BOX_NAMES[box_row], val))
+                            for row in range(9):
+                                if row // 3 == box_row:
+                                    """ don't remove value from this box """
+                                    continue
+                                self.matrix[row][col].remove(val)
+
+        log.info("Uncertainty at {}".format(self.get_uncertainty()))
+
+
 class Cell(object):
     def __init__(self, row, col):
         self._ndx = "{},{}".format(row, col)
@@ -222,11 +285,13 @@ class Cell(object):
 
     def set(self, val):
         if self.solved:
+            log.info("{} is already solved: {}".format(self._ndx, self.solved))
+            log.info('{} options are {}'.format(self._ndx, self.options))
             if self.solved != val:
                 raise ValueError("{} solved value {} is not {}".format(
                     self._ndx, self.solved, val))
             return
-        #log.info("Setting {} = {} -> SOLVED".format(self._ndx, val))
+        log.debug("Setting {} = {} -> SOLVED".format(self._ndx, val))
         if val not in self.options:
             raise ValueError("{} not an option: {}".format(val, self.options))
         self.options = [val]
@@ -236,6 +301,10 @@ class Cell(object):
             self.notify_cb(val)
 
     def remove(self, val):
+        if val == self.solved:
+            msg = "{} can't remove {}, last option".format(self._ndx, val)
+            log.error(msg)
+            raise ValueError(msg)
         if val in self.options:
             self.options.remove(val)
             if len(self.options) == 1:
@@ -253,8 +322,7 @@ class Cell(object):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-
+    logging.basicConfig(level=logging.INFO)
 
     X = [[0, 2, 0,  0, 3, 0,  0, 4, 0],
          [6, 0, 0,  0, 0, 0,  0, 0, 3],
@@ -266,8 +334,8 @@ if __name__ == "__main__":
          [4, 0, 0,  0, 0, 0,  0, 0, 8],
          [0, 3, 0,  0, 4, 0,  0, 2, 0]]
 
-    # test 1 - works w/ 2 tests
     # from http://www.forbeginners.info/sudoku-puzzles/
+    # test 1 - works w/ 2 tests
     X = [[0, 0, 9,  7, 4, 8,  0, 0, 0],
          [7, 0, 0,  0, 0, 0,  0, 0, 0],
          [0, 2, 0,  1, 0, 9,  0, 0, 0],
@@ -377,4 +445,18 @@ if __name__ == "__main__":
          [0, 0, 1,  0, 2, 0,  0, 0, 0],
          [2, 3, 0,  6, 4, 0,  0, 0, 0]]
 
+    X = [[2, 0, 0,  0, 1, 0,  0, 5, 0],
+         [3, 0, 5,  0, 4, 2,  0, 0, 0],
+         [0, 1, 8,  0, 0, 9,  0, 0, 2],
+         [0, 3, 2,  1, 0, 0,  8, 0, 0],
+         [0, 0, 1,  0, 2, 0,  3, 0, 0],
+         [0, 0, 9,  0, 0, 3,  2, 6, 0],
+         [1, 0, 0,  7, 0, 0,  9, 8, 0],
+         [0, 0, 0,  2, 6, 0,  5, 0, 7],
+         [0, 6, 0,  0, 8, 0,  0, 0, 3]]
+
     b = Board(X)
+    b.direct_elim()
+    b.close_sets()
+    b.box_sets()
+    b.show_known(4)
