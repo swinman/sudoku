@@ -14,6 +14,7 @@ import re
 import math
 import cmath
 import random
+import itertools
 import logging
 import argparse
 import numpy as np
@@ -165,19 +166,31 @@ class Board(object):
             from the options list outside of the specific locations where they
             are found
         """
+        """ when two boxes of a row or column are known, this forces whatever fills
+            the remainder of the row or column to exist as is and it excludes these
+            numbers from being anywhere other than this particular row or col
+        """
         def check_for_pairs(cells):
             unknowns = sum(1 for c in cells if not c.solved)
-            log.debug("{} unknowns in this group".format(unknowns))
+            log.debug(" {} unknowns in this group".format(unknowns))
             for group_size in range(2, unknowns):
                 """ this is only useful when there are unknowns to potentially remove """
-                groups = [c.options for c in cells if len(c.options) == group_size]
+                log.debug(" checking groups of {}".format(group_size))
+                groups = [c.options for c in cells if not c.solved and len(c.options) <= group_size]
+                log.debug(" groups are {}".format(groups))
+                vals = set()
+                for g in groups:
+                    vals.update(g)
+
                 if len(groups) < group_size:
                     continue
-                for template in groups:
+                for template in itertools.combinations(vals, group_size):
                     matched = 0
                     for g in groups:
-                        if template == g:
+                        log.debug("  testing if {} is contained in {}".format(g, template))
+                        if set(g).issubset(template):
                             matched += 1
+                            log.debug("  matches increased to {}".format(matched))
                     if matched == group_size:
                         """ we have a winner - the items in this group
                             can be eliminated from all other cells
@@ -185,11 +198,10 @@ class Board(object):
                         log.info("matched group {} found".format(
                             ''.join(str(x) for x in template)))
                         for c in cells:
-                            if c.solved or c.options == template:
+                            if c.solved or set(c.options).issubset(template):
                                 continue
                             for val in template:
                                 c.remove(val)
-
 
         uncertainty = self.get_uncertainty()
         keep_going = True
@@ -198,6 +210,7 @@ class Board(object):
                 check_for_pairs(row)
 
             for col in self.yield_cols():
+                c = log.debug("Checking: {}".format(','.join(c._ndx for c in col)))
                 check_for_pairs(col)
 
             for box in self.yield_boxes():
@@ -339,7 +352,7 @@ class Cell(object):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     # from http://www.forbeginners.info/sudoku-puzzles/
 
     puzzle = [
@@ -474,6 +487,15 @@ if __name__ == "__main__":
             [2, 0, 0,  0, 8, 0,  0, 1, 0],
             [0, 0, 3,  1, 0, 0,  0, 0, 0],
             [1, 0, 0,  4, 0, 5,  6, 0, 0]],
+           [[4, 9, 0, 0, 7, 2, 0, 0, 0],
+            [5, 0, 0, 4, 0, 0, 0, 0, 0],
+            [8, 0, 7, 0, 0, 0, 4, 3, 0],
+            [0, 0, 0, 0, 8, 0, 0, 0, 5],
+            [0, 0, 1, 0, 0, 9, 2, 0, 7],
+            [0, 0, 0, 0, 6, 0, 0, 0, 4],
+            [7, 0, 5, 0, 0, 0, 8, 9, 0],
+            [1, 0, 0, 9, 0, 0, 0, 0, 0],
+            [9, 3, 0, 0, 2, 6, 0, 0, 0]],
            ]
 
     b = Board(puzzle[-1])
