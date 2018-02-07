@@ -69,7 +69,7 @@ class Board(object):
                 lw = len(lines[-1])
                 lines.insert(-1, '-'*lw)
         lines.append('-'*lw)
-        print('\n'.join(lines))
+        print('\n' + '\n'.join(lines))
 
     def export(self):
         return [[c.solved if c.solved else 0 for c in row] for row in self.matrix]
@@ -409,7 +409,9 @@ class Cell(object):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    #logging.basicConfig(level=logging.DEBUG)
+    #logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARNING)
     # from http://www.forbeginners.info/sudoku-puzzles/
 
     def run_all(puzzles):
