@@ -107,22 +107,27 @@ class Board(object):
     def yield_rows(self):
         for row in range(9):
             cells = [self.matrix[row][col] for col in range(9)]
-            log.debug("testing row {}".format(row))
+            #log.debug("testing row {}".format(row))
             yield cells
 
     def yield_cols(self):
         for col in range(9):
             cells = [self.matrix[row][col] for row in range(9)]
-            log.debug("testing col {}".format(col))
+            #log.debug("testing col {}".format(col))
             yield cells
 
-    def yield_boxes(self):
+    def yield_boxes(self, rowwise=False):
         for box_row in range(3):
             for box_col in range(3):
                 cells = []
-                for i in range(3*box_row, 3*box_row + 3):
+                if rowwise:
                     for j in range(3*box_col, 3*box_col + 3):
-                        cells.append(self.matrix[i][j])
+                        for i in range(3*box_row, 3*box_row + 3):
+                            cells.append(self.matrix[i][j])
+                else:
+                    for i in range(3*box_row, 3*box_row + 3):
+                        for j in range(3*box_col, 3*box_col + 3):
+                            cells.append(self.matrix[i][j])
                 log.debug("testing {} box".format(_BOX_LABELS[box_row][box_col]))
                 yield cells
 
@@ -175,9 +180,9 @@ class Board(object):
             log.debug(" {} unknowns in this group".format(unknowns))
             for group_size in range(2, unknowns):
                 """ this is only useful when there are unknowns to potentially remove """
-                log.debug(" checking groups of {}".format(group_size))
+                #log.debug(" checking groups of {}".format(group_size))
                 groups = [c.options for c in cells if not c.solved and len(c.options) <= group_size]
-                log.debug(" groups are {}".format(groups))
+                #log.debug(" groups are {}".format(groups))
                 vals = set()
                 for g in groups:
                     vals.update(g)
@@ -187,10 +192,10 @@ class Board(object):
                 for template in itertools.combinations(vals, group_size):
                     matched = 0
                     for g in groups:
-                        log.debug("  testing if {} is contained in {}".format(g, template))
+                        #log.debug("  testing if {} is contained in {}".format(g, template))
                         if set(g).issubset(template):
                             matched += 1
-                            log.debug("  matches increased to {}".format(matched))
+                            #log.debug("  matches increased to {}".format(matched))
                     if matched == group_size:
                         """ we have a winner - the items in this group
                             can be eliminated from all other cells
@@ -228,7 +233,11 @@ class Board(object):
         """ check within a box if there is only one row / col where a number
             can occur and remove number from that row / col in adjoining boxes
 
-            [a b c | d e f | g h i]
+            check within a row, if there is only one box where a number can occur,
+            remove that number from the other rows in the box
+
+            check within a col, if there is only one box where a number can occur,
+            remove that number from the other cols within the box
 
             if a number is in two rows or columns and two quads, it can't be in
             those rows or columns in the 3rd quad.. this is likely not useful
@@ -240,6 +249,52 @@ class Board(object):
         _COL_BOX_NAMES = ["top", "center", "bottom"]
         _ROW_BOX_NAMES = ["left", "middle", "right"]
 
+
+        def find_limited_blocks(cells):
+            """ find values that must be located in a group of three within
+                a row / col / box list of 9 values
+                yield the group index where value must reside and the value
+            """
+            groups = [cells[i*3:i*3+3] for i in range(3)]
+            group_options = [set() for _ in range(3)]
+            for options, group in zip(group_options, groups):
+                for cell in group:
+                    options.update(cell.options)
+
+            solved = [c.solved for c in cells if c.solved]
+            for val in range(1, 10):
+                if val in solved:
+                    continue
+                for this in range(3):
+                    others = [x for x in range(3) if x != this]
+                    if not any(val in group_options[n] for n in others):
+                        log.info("{} must be in set {}".format(val, this))
+                        yield (this, val)
+
+
+        for row, cells in enumerate(self.yield_rows()):
+            for block, val in find_limited_blocks(cells):
+                log.info("Row {}, {} must be in box {}".format(row, val, block))
+                """ remove val from other rows in this block """
+                for i in range((row//3)*3, (row//3)*3 + 3):
+                    if row == i:
+                        continue
+                    for col in range(block*3, block*3 + 3):
+                        self.matrix[i][col].remove(val)
+
+        for col, cells in enumerate(self.yield_cols()):
+            for block, val in find_limited_blocks(cells):
+                log.info("Col {}, {} must be in box {}".format(col, val, block))
+                """ remove val from other cols in this block """
+                for j in range((col//3)*3, (col//3)*3 + 3):
+                    if col == j:
+                        continue
+                    for row in range(block*3, block*3 + 3):
+                        self.matrix[row][j].remove(val)
+
+
+        # FIXME : try doing the same thing, but yielding column wise
+        # instead of row-wise
         for box_row in range(3):
             for box_col in range(3):
                 solved = []
@@ -259,6 +314,7 @@ class Board(object):
                         continue
                     for this in range(3):
                         others = [x for x in range(3) if x != this]
+# NOTE : this should only check the larger numbers? because order isn't important?
                         if not any(val in box_row_options[n] for n in others):
                             """ only row for a value, remove from rest of row """
                             row = this + box_row * 3
@@ -297,6 +353,7 @@ class Board(object):
             else:
                 log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
                 keep_going = False
+        self.show_known(5)
 
 
 
@@ -354,6 +411,22 @@ class Cell(object):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
     # from http://www.forbeginners.info/sudoku-puzzles/
+
+    def run_all(puzzles):
+        initial_unc = []
+        uncertainties = []
+        boards = []
+        for p in puzzles:
+            b = Board(p)
+            initial_unc.append(b.get_uncertainty())
+            b.solve()
+            uncertainties.append(b.get_uncertainty())
+            boards.append(b.export())
+        avg_unc_begin = sum(initial_unc)/len(initial_unc)
+        avg_unc = sum(uncertainties)/len(uncertainties)
+        log.info("Average Starting Uncertainty: {:5.1f}".format(avg_unc_begin))
+        log.info("Average Final Uncertainty   : {:5.1f}".format(avg_unc))
+        return boards, uncertainties
 
     puzzle = [
         # 2, potential solutions, 1, complete, the incomplete doesnt work
@@ -487,17 +560,17 @@ if __name__ == "__main__":
             [2, 0, 0,  0, 8, 0,  0, 1, 0],
             [0, 0, 3,  1, 0, 0,  0, 0, 0],
             [1, 0, 0,  4, 0, 5,  6, 0, 0]],
-           [[4, 9, 0, 0, 7, 2, 0, 0, 0],
-            [5, 0, 0, 4, 0, 0, 0, 0, 0],
-            [8, 0, 7, 0, 0, 0, 4, 3, 0],
-            [0, 0, 0, 0, 8, 0, 0, 0, 5],
-            [0, 0, 1, 0, 0, 9, 2, 0, 7],
-            [0, 0, 0, 0, 6, 0, 0, 0, 4],
-            [7, 0, 5, 0, 0, 0, 8, 9, 0],
-            [1, 0, 0, 9, 0, 0, 0, 0, 0],
-            [9, 3, 0, 0, 2, 6, 0, 0, 0]],
+
+           [[4, 9, 0,  0, 7, 2,  0, 0, 0],
+            [5, 0, 0,  4, 0, 0,  0, 0, 0],
+            [8, 0, 7,  0, 0, 0,  4, 3, 0],
+            [0, 0, 0,  0, 8, 0,  0, 0, 5],
+            [0, 0, 1,  0, 0, 9,  2, 0, 7],
+            [0, 0, 0,  0, 6, 0,  0, 0, 4],
+            [7, 0, 5,  0, 0, 0,  8, 9, 0],
+            [1, 0, 0,  9, 0, 0,  0, 0, 0],
+            [9, 3, 0,  0, 2, 6,  0, 0, 0]],
            ]
 
     b = Board(puzzle[-1])
     b.solve()
-    b.show_known(4)
