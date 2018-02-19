@@ -35,7 +35,7 @@ class Board(object):
         for row in range(9):
             for col in range(9):
                 cell = Cell(row, col)
-                #log.debug("Cell {} update is {},{}".format(cell._ndx, row, col))
+                #log.debug("Cell {} update is {},{}".format(cell.ndx, row, col))
                 self.matrix[row][col] = cell
                 cell.set_notification(mk_lambda(row, col))
         for row in range(9):
@@ -43,7 +43,7 @@ class Board(object):
                 cell = self.matrix[row][col]
                 init_val = init[row][col]
                 if init_val != 0:
-                    log.info("Init of {} = {}".format(cell._ndx, init_val))
+                    log.info("Init of {} = {}".format(cell.ndx, init_val))
                     cell.set(init_val)
         log.info("Initial uncertainty {}".format(self.get_uncertainty()))
 
@@ -52,7 +52,9 @@ class Board(object):
         for col in range(9):
             for row in range(9):
                 cell = self.matrix[row][col]
-                uncertainty += len(cell.options) - 1
+                if cell.solved:
+                    continue
+                uncertainty += len(cell.options)
         return uncertainty
 
     def show_known(self, max_options=1):
@@ -77,7 +79,7 @@ class Board(object):
     def update(self, row, col, val):
         """ clear val from row, col and quadrant """
         cell = self.matrix[row][col]
-        log.debug("setting {} to {} from {} options".format(cell._ndx, val, cell.options))
+        log.debug("setting {} to {} from {} options".format(cell.ndx, val, cell.options))
         log.debug("Clearing {} from row {}".format(val, row))
         for j in range(9):
             if j == col:
@@ -101,7 +103,7 @@ class Board(object):
                 #log.debug("Clearing {} from {}, {}".format(val, i, j))
                 self.matrix[i][j].remove(val)
 
-        log.debug("Setting value {} on cell {}".format(val, cell._ndx))
+        log.debug("Setting value {} on cell {}".format(val, cell.ndx))
         cell.set(val)
 
     def yield_rows(self):
@@ -140,7 +142,7 @@ class Board(object):
                     cell, = ndx_list
                     if cell.solved:
                         continue
-                    log.info("{} only fits at {}".format(val, cell._ndx))
+                    log.info("{} only fits at {}".format(val, cell.ndx))
                     cell.set(val)
 
         uncertainty = self.get_uncertainty()
@@ -155,8 +157,8 @@ class Board(object):
             for box in self.yield_boxes():
                 unique_check(box)
 
-            # NOTE: it doesn't seem that these tests are different from one
-            # another
+            # NOTE: it doesn't seem that these tests have different results
+            # from one another
             new_uncertainty = self.get_uncertainty()
             if new_uncertainty < uncertainty:
                 log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
@@ -215,7 +217,7 @@ class Board(object):
                 check_for_pairs(row)
 
             for col in self.yield_cols():
-                c = log.debug("Checking: {}".format(','.join(c._ndx for c in col)))
+                c = log.debug("Checking: {}".format(','.join(c.ndx for c in col)))
                 check_for_pairs(col)
 
             for box in self.yield_boxes():
@@ -359,44 +361,44 @@ class Board(object):
 
 class Cell(object):
     def __init__(self, row, col):
-        self._ndx = "{},{}".format(row, col)
-        #log.debug("initializing {}".format(self._ndx))
+        self.ndx = "{},{}".format(row, col)
+        #log.debug("initializing {}".format(self.ndx))
         self.solved = False
         self.options = [i + 1 for i in range(9)]
         self.notify_cb = None
 
     def __repr__(self):
         if self.solved:
-            return "Cell({})={}".format(self._ndx, self.solved)
-        return "Cell({})".format(self._ndx)
+            return "Cell({})={}".format(self.ndx, self.solved)
+        return "Cell({})".format(self.ndx)
 
     def set(self, val):
         if self.solved:
-            log.info("{} is already solved: {}".format(self._ndx, self.solved))
-            log.info('{} options are {}'.format(self._ndx, self.options))
+            log.info("{} is already solved: {}".format(self.ndx, self.solved))
+            log.info('{} options are {}'.format(self.ndx, self.options))
             if self.solved != val:
                 raise ValueError("{} solved value {} is not {}".format(
-                    self._ndx, self.solved, val))
+                    self.ndx, self.solved, val))
             return
-        log.debug("Setting {} = {} -> SOLVED".format(self._ndx, val))
+        log.debug("Setting {} = {} -> SOLVED".format(self.ndx, val))
         if val not in self.options:
             raise ValueError("{} not an option: {}".format(val, self.options))
         self.options = [val]
         self.solved = val
         if self.notify_cb is not None:
-            #log.debug("Running notify callback for {} = {}".format(self._ndx, val))
+            #log.debug("Running notify callback for {} = {}".format(self.ndx, val))
             self.notify_cb(val)
 
     def remove(self, val):
         if val == self.solved:
-            msg = "{} can't remove {}, last option".format(self._ndx, val)
+            msg = "{} can't remove {}, last option".format(self.ndx, val)
             log.error(msg)
             raise ValueError(msg)
         if val in self.options:
             self.options.remove(val)
             if len(self.options) == 1:
                 val = self.options[0]
-                log.info("Found {} = {}, no other options".format(self._ndx, val))
+                log.info("Found {} = {}, no other options".format(self.ndx, val))
                 self.set(val)
 
     def has(self, val):
@@ -574,5 +576,8 @@ if __name__ == "__main__":
             [9, 3, 0,  0, 2, 6,  0, 0, 0]],
            ]
 
-    b = Board(puzzle[-1])
-    b.solve()
+
+    boards, uncertainties = run_all(puzzle)
+    b, *_  = boards
+    print("Uncertainties are:")
+    print(", ".join('{}'.format(u) for u in uncertainties))
