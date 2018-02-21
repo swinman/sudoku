@@ -357,15 +357,62 @@ class Board(object):
                 keep_going = False
         self.show_known(5)
 
+    def set_guess(self, number=None, row=None, col=None):
+        """ guess a value and see where it leads, number indicates the index
+            for the random value to pick.
+
+            45 1 45 2 3 9 ... number=2 would select 4 in cell 0,2
+
+            alternatively use (4, 0, 3) to select the same value
+        """
+        def get_guess_from_index(ndx):
+            for row in range(9):
+                for col in range(9):
+                    cell = self.matrix[row][col]
+                    if cell.solved:
+                        continue
+                    options = len(cell.options)
+                    if ndx < options:
+                        return cell.options[ndx], row, col
+                    ndx -= options
+
+        if row is None or col is None:
+            if number is None:
+                unc = self.get_uncertainty()
+                number = random.randint(0, unc - 1)
+            number, row, col = get_guess_from_index(number)
+
+        # at this point number is the value, row and col are where to guess
+        cell = self.matrix[row][col]
+        cell.set_guess(number)
 
 
 class Cell(object):
     def __init__(self, row, col):
         self.ndx = "{},{}".format(row, col)
         #log.debug("initializing {}".format(self.ndx))
-        self.solved = False
+        self._solved = False
+        self._guessing_mode = False
+        self._guess = None
         self.options = [i + 1 for i in range(9)]
         self.notify_cb = None
+        self.fail_notify_cb = None
+        self.failed_guesses = 0
+
+    def set_guessing_mode(self, on=True):
+        """ guessed versus not guessed values are indistinguisable outside
+            module, just when guessing mode is on then the options are only the
+            guesed options
+        """
+        self._guessing_mode = on
+    def _getGuessingMode(self): return self._guessing_mode
+    guessing_mode = property(fget=_getGuessingMode)
+
+    def _getSolved(self):
+        if self.guessing_mode:
+            return self._guess
+        return self._solved
+    solved = property(fget=_getSolved)
 
     def __repr__(self):
         if self.solved:
@@ -373,24 +420,60 @@ class Cell(object):
         return "Cell({})".format(self.ndx)
 
     def set(self, val):
-        if self.solved:
+        if self._solved:
             log.info("{} is already solved: {}".format(self.ndx, self.solved))
             log.info('{} options are {}'.format(self.ndx, self.options))
-            if self.solved != val:
+            if self._solved != val:
                 raise ValueError("{} solved value {} is not {}".format(
                     self.ndx, self.solved, val))
             return
         log.debug("Setting {} = {} -> SOLVED".format(self.ndx, val))
-        if val not in self.options:
-            raise ValueError("{} not an option: {}".format(val, self.options))
-        self.options = [val]
-        self.solved = val
-        if self.notify_cb is not None:
-            #log.debug("Running notify callback for {} = {}".format(self.ndx, val))
-            self.notify_cb(val)
+        if self._guessing_mode:
+            pass
+        else:
+            if val not in self.options:
+                raise ValueError("{} not an option: {}".format(val, self.options))
+            self.options = [val]
+            self.solved = val
+            if self.notify_cb is not None:
+                #log.debug("Running notify callback for {} = {}".format(self.ndx, val))
+                self.notify_cb(val)
+
+    def set_guess(self, val):
+        if self._solved:
+            log.error("cell {} is {}, can't guess {}".format(cell.ndx, cell._solved, number))
+            raise ValueError("Invalid guess, cell {} already solved".format(cell.ndx))
+        elif val not in self.options:
+            log.error("cell {} options {} doesn't include {}".format(cell.ndx, cell.options, number))
+            raise ValueError("Invalid guess, cell {} options don't include {}".format(cell.ndx, number))
+        elif self.guess is not None and self.guess != val:
+            log.error("Cell {} already guessed {}, not {}".format(self.ndx, self.guess, val))
+            self.bad_guess = True
+        elif val in self.guess_options:
+            log.error("Cell {} doesn't have {} as a guess option: {}".format(
+                self.ndx, val, self.guess_options))
+            self.bad_guess = True
+        self.guess = val
+
+    def clear_guess(self):
+        self.guess = None
+        self.guess_options = list(self.options)     # copy
+        self.bad_guess = False
+
+    def guess_not(self, val):
+        if val == self.guess:
+            msg = "{} can't remove {}, last option".format(self.ndx, val)
+            log.error(msg)
+            self.bad_guess = True
+        if val in self.guess_options:
+            self.guess_options.remove(val)
+            if len(self.guess_options) == 1:
+                val = self.options[0]
+                log.info("Guessing {} = {}, no other options".format(self.ndx, val))
+                self.guess(val)
 
     def remove(self, val):
-        if val == self.solved:
+        if val == self._solved:
             msg = "{} can't remove {}, last option".format(self.ndx, val)
             log.error(msg)
             raise ValueError(msg)
@@ -406,6 +489,9 @@ class Cell(object):
 
     def set_notification(self, fcn):
         self.notify_cb = fcn
+
+    def fail_notification(self, fcn):
+        self.fail_notify_cb = fcn
 
 
 
