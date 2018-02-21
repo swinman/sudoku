@@ -62,10 +62,7 @@ class Board(object):
         row_fmt = "|{}{}{}|{}{}{}|{}{}{}|"
         for row in range(9):
             cells = [self.matrix[row][col] for col in range(9)]
-            uses = [len(cell.options) <= max_options for cell in cells]
-            vals = [''.join(str(x) for x in cell.options) if use else '' for cell, use in zip(cells, uses)]
-            txt = ['{:^5}'.format(v) for v in vals]
-            #log.debug("vals is {}".format(vals))
+            txt = ['{:^7}'.format(cell.fmt_options(max_options)) for cell in cells]
             lines.append(row_fmt.format(*txt))
             if row % 3 == 0:
                 lw = len(lines[-1])
@@ -366,6 +363,8 @@ class Cell(object):
         self.solved = False
         self.options = [i + 1 for i in range(9)]
         self.notify_cb = None
+        self.known = False      # if value has been set because it was guessed
+        self.failed = 0         # if the cell has failed during a guess
 
     def __repr__(self):
         if self.solved:
@@ -389,6 +388,20 @@ class Cell(object):
             #log.debug("Running notify callback for {} = {}".format(self.ndx, val))
             self.notify_cb(val)
 
+    def tell(self, val):
+        """ tell the cell that it's value should be a certain number, this
+            does not impact solved status, only the display of options
+        """
+        if self.solved:
+            log.info("{} is already solved: {}".format(self.ndx, self.solved))
+            raise ValueError("Solution to {} is already known".format(self.ndx))
+        if val not in self.options:
+            raise ValueError("{} not an option: {}".format(val, self.options))
+        log.debug("Setting {} = {} -> WAS TOLD".format(self.ndx, val))
+        self.known = val
+        self.options.remove(val)
+        self.options.insert(0, val)
+
     def remove(self, val):
         if val == self.solved:
             msg = "{} can't remove {}, last option".format(self.ndx, val)
@@ -407,7 +420,18 @@ class Cell(object):
     def set_notification(self, fcn):
         self.notify_cb = fcn
 
-
+    def fmt_options(self, max_vals=5):
+        if self.solved:
+            return str(self.solved)
+        elif len(self.options) > max_vals:
+            rv = ''
+        else:
+            rv = ''.join(str(x) for x in self.options)
+        if self.known and not self.solved:
+            rv = '{},{}'.format(self.known, rv[1:])
+        if self.failed:
+            rv += '.'
+        return rv
 
 
 if __name__ == "__main__":
@@ -425,7 +449,7 @@ if __name__ == "__main__":
             initial_unc.append(b.get_uncertainty())
             b.solve()
             uncertainties.append(b.get_uncertainty())
-            boards.append(b.export())
+            boards.append(b)
         avg_unc_begin = sum(initial_unc)/len(initial_unc)
         avg_unc = sum(uncertainties)/len(uncertainties)
         log.info("Average Starting Uncertainty: {:5.1f}".format(avg_unc_begin))
@@ -579,5 +603,6 @@ if __name__ == "__main__":
 
     boards, uncertainties = run_all(puzzle)
     b, *_  = boards
+    exports = [b.export() for b in boards]
     print("Uncertainties are:")
     print(", ".join('{}'.format(u) for u in uncertainties))
