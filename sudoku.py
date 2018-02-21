@@ -49,13 +49,50 @@ class Board(object):
 
     def get_uncertainty(self):
         uncertainty = 0
-        for col in range(9):
-            for row in range(9):
-                cell = self.matrix[row][col]
-                if cell.solved:
-                    continue
-                uncertainty += len(cell.options)
+        for cell in self.yield_cells():
+            if cell.solved:
+                log.debug("Cell {} is solved".format(cell.ndx))
+                continue
+            if len(cell.options) == 1:
+                v = cell.options[0]
+                log.info("Only {} for cell {}, solving".format(v, cell.ndx))
+                cell.set(v)
+                continue
+            uncertainty += len(cell.options)
+        if uncertainty == 0:
+            uncertainty = self.test_solution()
         return uncertainty
+
+    def test_solution(self):
+        """ 0 on success otherwise negative for numbers missing """
+        def test(cells):
+            errors = 0
+            FULL_SET = set(list(range(1, 10)))
+            options = set()
+            fixed = set()
+            for cell in cells:
+                options.update(cell.options)
+                if cell.solved:
+                    if cell.solved in fixed:
+                        errors += 1
+                    fixed.update([cell.solved])
+            if len(options.difference(FULL_SET)):
+                errors += 1
+            return errors
+
+        rv = 0
+        for row in self.yield_rows():
+            rv -= test(row)
+            for cell in row:
+                if len(cell.options) == 0:
+                    rv -= 1
+        for col in self.yield_cols():
+            rv -= test(col)
+        for box in self.yield_boxes():
+            rv -= test(box)
+        if rv == 0:
+            log.info("Solution is correct")
+        return rv
 
     def show_known(self, max_options=1):
         lines = []
@@ -73,23 +110,53 @@ class Board(object):
     def export(self):
         return [[c.solved if c.solved else 0 for c in row] for row in self.matrix]
 
+    def guess(self, row, col, val):
+        for cell in self.yield_cells():
+            if cell.guessing_mode:
+                continue
+            cell.set_guessing_mode(True)
+        self.update(row, col, val)
+
+    def clear_guesses(self, cheat=True, clear_mistakes=False):
+        uncertainty = self.get_uncertainty()
+        for cell in self.yield_cells():
+            if cheat and uncertainty == 0:
+                cell.cheat()
+            elif cheat == False:
+                cell.clear_cheats()
+                cell.clear_mistakes()
+            if clear_mistakes:
+                cell.clear_mistakes()
+            cell.set_guessing_mode(False)
+
     def update(self, row, col, val):
         """ clear val from row, col and quadrant """
         cell = self.matrix[row][col]
         log.debug("setting {} to {} from {} options".format(cell.ndx, val, cell.options))
         log.debug("Clearing {} from row {}".format(val, row))
+        err = False
         for j in range(9):
             if j == col:
                 continue
             #log.debug("Clearing {} from {}, {}".format(val, row, j))
-            self.matrix[row][j].remove(val)
+            try:
+                ocell = self.matrix[row][j]
+                ocell.remove(val)
+            except ValueError as exception:
+                log.error("Error removing {} from {}".format(val, ocell.ndx))
+                err = True
 
         log.debug("Clearing {} from col {}".format(val, col))
         for i in range(9):
             if i == row:
                 continue
             #log.debug("Clearing {} from {}, {}".format(val, i, col))
-            self.matrix[i][col].remove(val)
+            try:
+                ocell = self.matrix[i][col]
+                ocell.remove(val)
+            except ValueError as exception:
+                log.error("Error removing {} from {}".format(val, ocell.ndx))
+                err = True
 
         box_row, box_col = row // 3, col // 3
         log.debug("Clearing {} from {} box".format(val, _BOX_LABELS[box_row][box_col]))
@@ -98,10 +165,17 @@ class Board(object):
                 if i == row and j == col:
                     continue
                 #log.debug("Clearing {} from {}, {}".format(val, i, j))
-                self.matrix[i][j].remove(val)
+                try:
+                    ocell = self.matrix[i][j]
+                    ocell.remove(val)
+                except ValueError as exception:
+                    log.error("Error removing {} from {}".format(val, ocell.ndx))
+                    err = True
 
         log.debug("Setting value {} on cell {}".format(val, cell.ndx))
         cell.set(val)
+        if err:
+            raise ValueError("Error setting {} to {}".format(cell.ndx, val))
 
     def yield_rows(self):
         for row in range(9):
@@ -129,6 +203,11 @@ class Board(object):
                             cells.append(self.matrix[i][j])
                 log.debug("testing {} box".format(_BOX_LABELS[box_row][box_col]))
                 yield cells
+
+    def yield_cells(self):
+        for row in range(9):
+            for col in range(9):
+                yield self.matrix[row][col]
 
     def direct_elim(self):
         """ check when a number can't fit anywhere else in a row, col or box """
@@ -360,15 +439,24 @@ class Cell(object):
     def __init__(self, row, col):
         self.ndx = "{},{}".format(row, col)
         #log.debug("initializing {}".format(self.ndx))
-        self.solved = False
-        self.options = [i + 1 for i in range(9)]
+        self._solved = False
+        self._options = [i + 1 for i in range(9)]
         self.notify_cb = None
         self.known = False      # if value has been set because it was guessed
         self.failed = 0         # if the cell has failed during a guess
+        self.guessing_mode = False
+        self.guess = False
+        self.guesses = None
+
+    def _getSolved(self): return self.guess if self.guessing_mode else self._solved
+    solved = property(fget=_getSolved)
+
+    def _getOptions(self): return self.guesses if self.guessing_mode else self._options
+    options = property(fget=_getOptions)
 
     def __repr__(self):
-        if self.solved:
-            return "Cell({})={}".format(self.ndx, self.solved)
+        if self._solved:
+            return "Cell({})={}".format(self.ndx, self._solved)
         return "Cell({})".format(self.ndx)
 
     def set(self, val):
@@ -376,36 +464,28 @@ class Cell(object):
             log.info("{} is already solved: {}".format(self.ndx, self.solved))
             log.info('{} options are {}'.format(self.ndx, self.options))
             if self.solved != val:
+                self.failed += 1
                 raise ValueError("{} solved value {} is not {}".format(
                     self.ndx, self.solved, val))
             return
         log.debug("Setting {} = {} -> SOLVED".format(self.ndx, val))
         if val not in self.options:
             raise ValueError("{} not an option: {}".format(val, self.options))
-        self.options = [val]
-        self.solved = val
+        if self.guessing_mode:
+            self.guesses = [val]
+            self.guess = val
+        else:
+            self._options = [val]
+            self._solved = val
         if self.notify_cb is not None:
             #log.debug("Running notify callback for {} = {}".format(self.ndx, val))
             self.notify_cb(val)
-
-    def tell(self, val):
-        """ tell the cell that it's value should be a certain number, this
-            does not impact solved status, only the display of options
-        """
-        if self.solved:
-            log.info("{} is already solved: {}".format(self.ndx, self.solved))
-            raise ValueError("Solution to {} is already known".format(self.ndx))
-        if val not in self.options:
-            raise ValueError("{} not an option: {}".format(val, self.options))
-        log.debug("Setting {} = {} -> WAS TOLD".format(self.ndx, val))
-        self.known = val
-        self.options.remove(val)
-        self.options.insert(0, val)
 
     def remove(self, val):
         if val == self.solved:
             msg = "{} can't remove {}, last option".format(self.ndx, val)
             log.error(msg)
+            self.failed += 1
             raise ValueError(msg)
         if val in self.options:
             self.options.remove(val)
@@ -422,16 +502,51 @@ class Cell(object):
 
     def fmt_options(self, max_vals=5):
         if self.solved:
-            return str(self.solved)
+            rv = str(self.solved)
         elif len(self.options) > max_vals:
             rv = ''
         else:
             rv = ''.join(str(x) for x in self.options)
         if self.known and not self.solved:
-            rv = '{},{}'.format(self.known, rv[1:])
+            rv = '{}:{}'.format(self.known, rv[1:])
         if self.failed:
-            rv += '.'
+            rv += 'x'
         return rv
+
+    def cheat(self, val=None):
+        """ tells the cell that it's value should be a certain number, this
+            does not impact solved status, only the display of options
+        """
+        if val is None and self.guessing_mode:
+            val = self.guess
+        elif self.guessing_mode:
+            raise ValueError("Remove guessing mode before explicitly cheating")
+        elif self._solved:
+            log.info("{} is already solved: {}".format(self.ndx, self._solved))
+            #raise ValueError("Solution to {} is already known".format(self.ndx))
+            return
+        if val not in self.options:
+            raise ValueError("{} not an option: {}".format(val, self.options))
+        log.debug("Setting {} = {} -> WAS TOLD".format(self.ndx, val))
+        self.known = val
+        self._options.remove(val)
+        self._options.insert(0, val)
+
+    def clear_mistakes(self):
+        self.failed = 0
+
+    def clear_cheats(self):
+        self.known = False
+
+    def set_guessing_mode(self, on=True):
+        if on:
+            self.guess = self._solved
+            self.guesses = list(self._options)
+            self.guessing_mode = True
+        else:
+            self.guesses = None
+            self.guess = False
+            self.guessing_mode = False
 
 
 if __name__ == "__main__":
