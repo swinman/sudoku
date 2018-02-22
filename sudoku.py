@@ -43,7 +43,7 @@ class Board(object):
                 cell = self.matrix[row][col]
                 init_val = init[row][col]
                 if init_val != 0:
-                    log.info("Init of {} = {}".format(cell.ndx, init_val))
+                    log.debug("Init of {} = {}".format(cell.ndx, init_val))
                     cell.set(init_val)
         log.info("Initial uncertainty {}".format(self.get_uncertainty()))
 
@@ -143,7 +143,11 @@ class Board(object):
                 ocell = self.matrix[row][j]
                 ocell.remove(val)
             except ValueError as exception:
-                log.error("Error removing {} from {}".format(val, ocell.ndx))
+                msg = "Error removing {} from {}".format(val, ocell.ndx)
+                if ocell.guessing_mode:
+                    log.debug(msg)
+                else:
+                    log.error(msg)
                 err = True
 
         log.debug("Clearing {} from col {}".format(val, col))
@@ -155,7 +159,11 @@ class Board(object):
                 ocell = self.matrix[i][col]
                 ocell.remove(val)
             except ValueError as exception:
-                log.error("Error removing {} from {}".format(val, ocell.ndx))
+                msg = "Error removing {} from {}".format(val, ocell.ndx)
+                if ocell.guessing_mode:
+                    log.debug(msg)
+                else:
+                    log.error(msg)
                 err = True
 
         box_row, box_col = row // 3, col // 3
@@ -169,7 +177,11 @@ class Board(object):
                     ocell = self.matrix[i][j]
                     ocell.remove(val)
                 except ValueError as exception:
-                    log.error("Error removing {} from {}".format(val, ocell.ndx))
+                    msg = "Error removing {} from {}".format(val, ocell.ndx)
+                    if ocell.guessing_mode:
+                        log.debug(msg)
+                    else:
+                        log.error(msg)
                     err = True
 
         log.debug("Setting value {} on cell {}".format(val, cell.ndx))
@@ -218,7 +230,7 @@ class Board(object):
                     cell, = ndx_list
                     if cell.solved:
                         continue
-                    log.info("{} only fits at {}".format(val, cell.ndx))
+                    log.debug("{} only fits at {}".format(val, cell.ndx))
                     cell.set(val)
 
         uncertainty = self.get_uncertainty()
@@ -236,11 +248,14 @@ class Board(object):
             # NOTE: it doesn't seem that these tests have different results
             # from one another
             new_uncertainty = self.get_uncertainty()
+            if new_uncertainty == 0:
+                log.info("finished")
+                keep_going = False
             if new_uncertainty < uncertainty:
-                log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
+                log.debug("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
                 uncertainty = new_uncertainty
             else:
-                log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
+                log.debug("No uncertainty reduction, quitting at {}".format(uncertainty))
                 keep_going = False
 
     def close_sets(self):
@@ -278,7 +293,7 @@ class Board(object):
                         """ we have a winner - the items in this group
                             can be eliminated from all other cells
                         """
-                        log.info("matched group {} found".format(
+                        log.debug("matched group {} found".format(
                             ''.join(str(x) for x in template)))
                         for c in cells:
                             if c.solved or set(c.options).issubset(template):
@@ -301,10 +316,10 @@ class Board(object):
 
             new_uncertainty = self.get_uncertainty()
             if new_uncertainty < uncertainty:
-                log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
+                log.debug("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
                 uncertainty = new_uncertainty
             else:
-                log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
+                log.debug("No uncertainty reduction, quitting at {}".format(uncertainty))
                 keep_going = False
 
     def box_sets(self):
@@ -346,13 +361,13 @@ class Board(object):
                 for this in range(3):
                     others = [x for x in range(3) if x != this]
                     if not any(val in group_options[n] for n in others):
-                        log.info("{} must be in set {}".format(val, this))
+                        log.debug("{} must be in set {}".format(val, this))
                         yield (this, val)
 
 
         for row, cells in enumerate(self.yield_rows()):
             for block, val in find_limited_blocks(cells):
-                log.info("Row {}, {} must be in box {}".format(row, val, block))
+                log.debug("Row {}, {} must be in box {}".format(row, val, block))
                 """ remove val from other rows in this block """
                 for i in range((row//3)*3, (row//3)*3 + 3):
                     if row == i:
@@ -362,7 +377,7 @@ class Board(object):
 
         for col, cells in enumerate(self.yield_cols()):
             for block, val in find_limited_blocks(cells):
-                log.info("Col {}, {} must be in box {}".format(col, val, block))
+                log.debug("Col {}, {} must be in box {}".format(col, val, block))
                 """ remove val from other cols in this block """
                 for j in range((col//3)*3, (col//3)*3 + 3):
                     if col == j:
@@ -414,7 +429,7 @@ class Board(object):
                                     continue
                                 self.matrix[row][col].remove(val)
 
-        log.info("Uncertainty at {}".format(self.get_uncertainty()))
+        log.debug("Uncertainty at {}".format(self.get_uncertainty()))
 
     def solve(self):
         uncertainty = self.get_uncertainty()
@@ -426,13 +441,58 @@ class Board(object):
 
             new_uncertainty = self.get_uncertainty()
             if new_uncertainty < uncertainty:
-                log.info("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
+                log.debug("Uncertainty from {} to {}".format(uncertainty, new_uncertainty))
                 uncertainty = new_uncertainty
             else:
-                log.info("No uncertainty reduction, quitting at {}".format(uncertainty))
+                log.debug("No uncertainty reduction, quitting at {}".format(uncertainty))
                 keep_going = False
+
+
+        self.guess_solution()
+        self.clear_guesses()
         self.show_known(5)
 
+    def guess_solution(self, previous_guesses=None):
+        """ recursively guess solutions, storing previous guesses that were
+            not unsuccessful because a clear operation must clear everything
+        """
+        if previous_guesses is None:
+            previous_guesses = []
+        for row in range(9):
+            for col in range(9):
+                cell = self.matrix[row][col]
+                if cell.solved:
+                    continue
+                log.debug("{}About to go through {} for cell {}".format(
+                    ' '*len(previous_guesses), cell.options, cell.ndx))
+                options = list(cell.options)
+                for val in options:
+                    log.debug("{}Guessing {} for cell {}".format(
+                        ' '*len(previous_guesses), val, cell.ndx))
+                    try:
+                        guess = [row, col, val]
+                        self.guess(*guess)
+                        uncertainty = self.get_uncertainty()
+                        if uncertainty == 0:
+                            return 0
+                        log.debug("{}Uncertainty now at {}".format(
+                            ' '*len(previous_guesses), uncertainty))
+                        self.guess_solution(previous_guesses=previous_guesses + [guess])
+                        """ if this doesn't cause an exception it solved """
+                        return 0
+                    except ValueError:
+                        log.debug("{}Guess {} on {} failed, resetting".format(
+                            ' '*len(previous_guesses), val, cell.ndx))
+                        self.clear_guesses(clear_mistakes=True)
+                        log.debug("{}Clearing all guesses".format(
+                            ' '*len(previous_guesses)))
+                        for guess in previous_guesses:
+                            log.debug("{0}Applying {3} to {1},{2}".format(
+                                ' '*len(previous_guesses), *guess))
+                            self.guess(*guess)
+                log.debug("{}End of options for {}".format(
+                    ' '*len(previous_guesses), cell.ndx))
+                raise ValueError("No valid options for cell {}".format(cell.ndx))
 
 
 class Cell(object):
@@ -461,8 +521,8 @@ class Cell(object):
 
     def set(self, val):
         if self.solved:
-            log.info("{} is already solved: {}".format(self.ndx, self.solved))
-            log.info('{} options are {}'.format(self.ndx, self.options))
+            log.debug("{} is already solved: {}".format(self.ndx, self.solved))
+            log.debug('{} options are {}'.format(self.ndx, self.options))
             if self.solved != val:
                 self.failed += 1
                 raise ValueError("{} solved value {} is not {}".format(
@@ -484,14 +544,17 @@ class Cell(object):
     def remove(self, val):
         if val == self.solved:
             msg = "{} can't remove {}, last option".format(self.ndx, val)
-            log.error(msg)
+            if self.guessing_mode:
+                log.debug(msg)
+            else:
+                log.error(msg)
             self.failed += 1
             raise ValueError(msg)
         if val in self.options:
             self.options.remove(val)
             if len(self.options) == 1:
                 val = self.options[0]
-                log.info("Found {} = {}, no other options".format(self.ndx, val))
+                log.debug("Found {} = {}, no other options".format(self.ndx, val))
                 self.set(val)
 
     def has(self, val):
@@ -551,8 +614,8 @@ class Cell(object):
 
 if __name__ == "__main__":
     #logging.basicConfig(level=logging.DEBUG)
-    #logging.basicConfig(level=logging.INFO)
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
+    #logging.basicConfig(level=logging.WARNING)
     # from http://www.forbeginners.info/sudoku-puzzles/
 
     def run_all(puzzles):
@@ -717,7 +780,7 @@ if __name__ == "__main__":
 
 
     boards, uncertainties = run_all(puzzle)
-    b, *_  = boards
+    b = boards[2]
     exports = [b.export() for b in boards]
     print("Uncertainties are:")
     print(", ".join('{}'.format(u) for u in uncertainties))
